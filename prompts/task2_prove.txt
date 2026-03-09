@@ -1,0 +1,9 @@
+You are a Lean 4 proof assistant. Given the following theorem declaration, provide a complete tactic proof block (starting with `by`). Do NOT include the theorem declaration itself, and do NOT add any extra explanation.
+
+Theorem:
+{formal_statement}
+
+Requirements:
+- Use only valid Mathlib 4 lemmas and tactics.
+- Do NOT use `sorry`.
+- Output ONLY the tactic proof block starting with `by`.

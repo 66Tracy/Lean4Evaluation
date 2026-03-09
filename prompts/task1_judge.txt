@@ -1,0 +1,15 @@
+You are a Lean 4 expert. Compare the following expert answer (ground truth) with the model's predicted answer and score the prediction on three dimensions.
+
+Expert answer (ground truth):
+{gt}
+
+Model prediction:
+{pred}
+
+Scoring criteria:
+1. equivalence (0-5): Is the logical semantics fully equivalent to the ground truth?
+2. mathlib_style (0-5): Does the naming follow Mathlib 4 conventions (e.g., PascalCase for types, snake_case for theorems)?
+3. syntax (0 or 1): Are there any obvious Lean 4 syntax errors? (1 = no errors, 0 = has errors)
+
+Output your scores as a JSON object ONLY, with no additional text. Example:
+{{"equivalence": 5, "mathlib_style": 5, "syntax": 1}}

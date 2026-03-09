@@ -1,0 +1,4 @@
+Please translate the following natural language mathematical statement into a Lean 4 formal theorem declaration. Output ONLY the theorem declaration itself (starting with `theorem`), without any additional explanation or surrounding code.
+
+Natural language statement:
+{nl_statement}

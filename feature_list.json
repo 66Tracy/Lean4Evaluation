@@ -1,0 +1,28 @@
+[
+  {
+    "category": "functional",
+    "description": "Task1 Translation Evaluation: Run task1 on mathd_algebra_478 benchmark entry. Translates nl_statement to Lean 4 formal statement via LLM, then judges translation quality with a judge model, producing scored JSONL output with equivalence, mathlib_style, syntax, and final_score fields.",
+    "steps": [
+      "Step 1: Run `python scripts/run_task1.py --data benchmarks/MiniF2F/MiniF2F-test-examples.jsonl --output results/task1_output.jsonl --concurrency 2`",
+      "Step 2: Verify results/task1_output.jsonl exists and contains one entry per input record",
+      "Step 3: Verify each output record has fields: id, nl_statement, formal_statement, pred, equivalence, mathlib_style, syntax, final_score",
+      "Step 4: Verify equivalence is in range 0-5, mathlib_style is in range 0-5, syntax is 0 or 1",
+      "Step 5: Verify final_score equals (equivalence + mathlib_style) * syntax for each record",
+      "Step 6: Verify pred field is non-empty (model produced a translation)"
+    ],
+    "passes": true
+  },
+  {
+    "category": "functional",
+    "description": "Task2 Proof Evaluation (Pass@k): Run task2 on mathd_algebra_478 benchmark entry with k=2. Generates k proof attempts via LLM, constructs full Lean modules, executes them via Lean runner API, computes Pass@k metric, and produces JSONL output with success_count, pass_at_k, and per-attempt details.",
+    "steps": [
+      "Step 1: Run `python scripts/run_task2.py --data benchmarks/MiniF2F/MiniF2F-test-examples.jsonl --output results/task2_output.jsonl --k 2 --concurrency 2 --lean-concurrency 2`",
+      "Step 2: Verify results/task2_output.jsonl exists and contains one entry per input record",
+      "Step 3: Verify each output record has fields: id, formal_statement, k, success_count, pass_at_k, details",
+      "Step 4: Verify details array has exactly k=2 entries per record, each with proof, success (bool), elapsed_sec fields",
+      "Step 5: Verify pass_at_k is correctly computed: 1 if success_count > 0, else 0 (since n=k=2)",
+      "Step 6: Verify success_count is consistent with the number of true values in details[].success"
+    ],
+    "passes": true
+  }
+]

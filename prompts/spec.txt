@@ -1,0 +1,352 @@
+<project_specification>
+  <project_name>Lean4Evaluation - LLM Formal Mathematics Evaluation Framework</project_name>
+
+  <overview>
+    Build a Python-based evaluation framework for assessing LLM capabilities in Lean 4 formal mathematics.
+    The framework provides an async inference engine that concurrently calls LLM APIs (supporting any
+    OpenAI-compatible base_url/model/api_key), with two evaluation tasks:
+    Task1 evaluates natural language to formal statement translation quality using a configurable judge model;
+    Task2 evaluates theorem proving ability by generating proofs, executing them via a Lean runner API,
+    and computing Pass@k metrics. All tasks interact with the core framework only through configuration,
+    prompt templates, and data files, following a decoupled architecture.
+  </overview>
+
+  <technology_stack>
+    <language>Python 3.10+</language>
+    <package_manager>uv</package_manager>
+    <dependencies>
+      - openai>=1.0.0          # AsyncOpenAI client for LLM inference
+      - python-dotenv>=1.0.0   # Environment variable loading from .env
+      - aiohttp>=3.9.0         # Async HTTP support
+      - pydantic>=2.0.0        # Data validation and settings
+      - requests>=2.31.0       # Synchronous HTTP for run_lean_code
+      - tenacity>=8.0.0        # Retry with exponential backoff
+      - tqdm>=4.60.0           # Progress bars
+    </dependencies>
+    <async_framework>asyncio with asyncio.Semaphore for concurrency control</async_framework>
+    <thread_pool>concurrent.futures.ThreadPoolExecutor for Lean code execution</thread_pool>
+  </technology_stack>
+
+  <prerequisites>
+    <environment_setup>
+      - Initialize project with `uv init` and configure pyproject.toml
+      - Create .env file with API credentials (BASE_URL, MODEL_NAME, API_KEY)
+      - Lean runner API server accessible at configurable endpoint (default: http://localhost:8000/run)
+      - Benchmark data files in JSONL format under benchmarks/
+    </environment_setup>
+  </prerequisites>
+
+  <directory_structure>
+    .
+    ├── src/
+    │   ├── __init__.py
+    │   ├── core/                    # Inference framework core
+    │   │   ├── __init__.py
+    │   │   ├── client.py            # AsyncOpenAI wrapper with batch generation
+    │   │   ├── config.py            # Configuration loading (env + dotenv)
+    │   │   └── utils.py             # Prompt loading, JSONL I/O, code extraction
+    │   ├── tasks/                   # Evaluation task implementations
+    │   │   ├── __init__.py
+    │   │   ├── task1.py             # Translation quality evaluation
+    │   │   └── task2.py             # Proof capability evaluation (Pass@k)
+    │   └── lean_runner_api.py       # Lean code execution API client (provided)
+    ├── prompts/                     # Prompt templates
+    │   ├── task1_translate.txt      # Translation prompt for Task1
+    │   ├── task1_judge.txt          # Judge scoring prompt for Task1
+    │   └── task2_prove.txt          # Proof generation prompt for Task2
+    ├── benchmarks/                  # Benchmark datasets
+    │   └── MiniF2F/
+    │       └── MiniF2F-test-examples.jsonl
+    ├── scripts/                     # CLI entry points
+    │   ├── run_task1.py             # Run Task1 evaluation
+    │   └── run_task2.py             # Run Task2 evaluation
+    ├── tests/                       # Unit tests
+    ├── .env.example                 # Example environment configuration
+    └── pyproject.toml               # Project metadata and dependencies
+  </directory_structure>
+
+  <core_features>
+    <inference_framework>
+      <async_client description="src/core/client.py">
+        - Wraps AsyncOpenAI client; constructor accepts base_url, api_key, model
+        - async generate(prompt: str, **kwargs) -> str:
+          - Supports max_tokens, temperature, seed parameters
+          - Auto-extracts content from markdown code blocks (```json...```, ```lean...```)
+            if present; otherwise returns full text
+          - Retry on failure using tenacity with exponential backoff
+        - async batch_generate(prompts: List[str], max_concurrency: int = 5, **kwargs) -> List[str]:
+          - Uses asyncio.Semaphore to control concurrency
+          - Returns results list in same order as input prompts
+          - Handles individual prompt failures gracefully (returns error marker)
+      </async_client>
+
+      <config description="src/core/config.py">
+        - Loads .env file via python-dotenv
+        - Provides APIConfig dataclass with fields: TEST_API_URL, TEST_MODEL_NAME, TEST_API_KEY
+        - Environment variables override: JUDGE_API_URL, JUDGE_MODEL_NAME, API_KEY
+        - Optional judge model config: JUDGE_BASE_URL, JUDGE_MODEL, JUDGE_API_KEY
+        - Lean runner config: LEAN_API_URL (default http://localhost:8000/run)
+      </config>
+
+      <utils description="src/core/utils.py">
+        - load_prompt(template_path: str, **kwargs) -> str:
+          Read template file and format with provided kwargs
+        - read_jsonl(file_path: str) -> List[dict]:
+          Read JSONL file, return list of parsed JSON objects
+        - write_jsonl(file_path: str, data: List[dict]):
+          Write list of dicts to JSONL file
+        - extract_code_from_markdown(text: str, language: str = "lean") -> str:
+          Extract code block content for specified language from markdown;
+          returns original text if no code block found
+        - extract_json_from_response(response: str) -> Dict:
+          Extract json block content. Raise error when format error.
+          returns Dict
+      </utils>
+    </inference_framework>
+
+    <task1_translation_evaluation>
+      <description>
+        Evaluate LLM's ability to translate natural language math statements into
+        Lean 4 formal theorem declarations. Uses a judge model to score translations
+        on three dimensions.
+      </description>
+
+      <data_format>
+        Input JSONL fields: id, split, formal_statement, header, nl_statement, informal_proof
+        Only id, nl_statement, formal_statement are used for Task1
+      </data_format>
+
+      <prompt_templates>
+        <translate prompt="prompts/task1_translate.txt">
+          Instructs LLM to translate a natural language math statement into a Lean 4
+          formal theorem declaration. Output should contain only the theorem declaration
+          with no additional explanation.
+          Variable: {nl_statement}
+        </translate>
+        <judge prompt="prompts/task1_judge.txt">
+          Instructs judge model (Lean 4 expert role) to compare ground truth {gt}
+          with model prediction {pred} and score on three dimensions:
+          1. equivalence (0-5): logical semantic equivalence
+          2. mathlib_style (0-5): adherence to Mathlib 4 naming conventions (PascalCase types, etc.)
+          3. syntax (0/1): presence of obvious Lean syntax errors
+          Output as JSON: {"equivalence": N, "mathlib_style": N, "syntax": N}
+        </judge>
+      </prompt_templates>
+
+      <scoring>
+        final_score = (equivalence + mathlib_style) * syntax
+        Maximum possible score: 10
+      </scoring>
+
+      <script entry="scripts/run_task1.py">
+        CLI arguments:
+          --data           Path to benchmark JSONL file (required)
+          --output         Path to output JSONL file (required)
+          --prompt         Translation prompt template (default: prompts/task1_translate.txt)
+          --judge-prompt   Judge prompt template (default: prompts/task1_judge.txt)
+          --judge-model    Judge model name (optional, defaults to tested model)
+          --judge-url      Judge model API URL (optional, defaults to tested model URL)
+          --judge-key      Judge model API key (optional, defaults to tested model key)
+          --concurrency    Max concurrent API calls (default: 5)
+
+        Workflow:
+          1. Load benchmark data from --data
+          2. Construct translation prompts using template + nl_statement
+          3. Call batch_generate to get model predictions
+          4. For each (gt, pred) pair, construct judge prompt and call judge model
+          5. Parse judge JSON response, compute final_score
+          6. Write results to output JSONL
+      </script>
+
+      <output_format>
+        Per-record JSONL:
+        {
+          "id": "mathd_algebra_478",
+          "nl_statement": "...",
+          "formal_statement": "...",
+          "pred": "...",
+          "equivalence": 5,
+          "mathlib_style": 4,
+          "syntax": 1,
+          "final_score": 9
+        }
+      </output_format>
+    </task1_translation_evaluation>
+
+    <task2_proof_evaluation>
+      <description>
+        Evaluate LLM's ability to prove Lean 4 theorems. For each theorem, generate
+        k proof attempts, execute each via the Lean runner API, and compute Pass@k.
+      </description>
+
+      <data_format>
+        Input JSONL fields: id, split, formal_statement, header, nl_statement, informal_proof
+        Task2 primarily uses: id, formal_statement, header
+      </data_format>
+
+      <prompt_template prompt="prompts/task2_prove.txt">
+        Instructs LLM (Lean 4 proof assistant role) to generate a complete tactic
+        proof block (starting with `by`) for a given formal_statement.
+        Must use only valid Mathlib 4 lemmas; sorry is forbidden.
+        Variable: {formal_statement}
+      </prompt_template>
+
+      <proof_construction>
+        For each generated proof_code, construct a complete Lean module:
+        ```
+        {header}
+
+        {formal_statement_with_sorry_replaced_by_proof_code}
+        ```
+        - Replace `sorry` in formal_statement with the generated proof code
+        - If model returns markdown, use extract_code_from_markdown to extract Lean code
+        - Handle indentation: ensure proof lines align properly after `by`
+      </proof_construction>
+
+      <lean_execution>
+        - Call run_lean_code(full_lean_code) from src/lean_runner_api.py
+        - Use concurrent.futures.ThreadPoolExecutor for parallel execution
+        - Configurable concurrency via --lean-concurrency (default: 5)
+        - Success determination function is_success(result: Dict) -> bool:
+          - Returns False if result["ok"] is False (HTTP failure)
+          - Parses result["response"] to determine Lean compilation success
+          - Configurable via --success-function parameter with presets
+          - Default: check for no errors in response (exact logic TBD based on API format)
+      </lean_execution>
+
+      <pass_at_k_calculation>
+        For each theorem with n=k attempts and c successes:
+        pass_at_k = 1 - C(n-c, k) / C(n, k)
+        When n=k: simplifies to 1 if c > 0, else 0
+        Uses math.comb for combinatorial calculation
+      </pass_at_k_calculation>
+
+      <script entry="scripts/run_task2.py">
+        CLI arguments:
+          --data              Path to benchmark JSONL file (required)
+          --output            Path to output JSONL file (required)
+          --prompt            Proof prompt template (default: prompts/task2_prove.txt)
+          --k                 Number of proof attempts per theorem (default: 5)
+          --temperature       Sampling temperature for diversity (default: 0.7)
+          --seed-base         Base seed for reproducibility (optional)
+          --lean-api          Lean runner API URL (default: from env or http://localhost:8000/run)
+          --lean-concurrency  Max concurrent Lean executions (default: 5)
+          --lean-timeout      Lean execution timeout in seconds (default: 60)
+          --concurrency       Max concurrent LLM API calls (default: 5)
+
+        Workflow:
+          1. Load benchmark data from --data
+          2. For each theorem, construct k identical prompts (diversity via temperature/seed)
+          3. Call batch_generate with temperature to get k proof attempts
+          4. For each proof attempt, construct full Lean module (header + statement + proof)
+          5. Execute all proofs via run_lean_code with thread pool
+          6. Count successes, compute pass_at_k per theorem
+          7. Write results to output JSONL
+      </script>
+
+      <output_format>
+        Per-record JSONL:
+        {
+          "id": "mathd_algebra_478",
+          "formal_statement": "...",
+          "k": 5,
+          "success_count": 3,
+          "pass_at_k": 1.0,
+          "details": [
+            {"proof": "...", "success": true, "elapsed_sec": 12.5},
+            {"proof": "...", "success": false, "elapsed_sec": 8.3, "error": "..."},
+            ...
+          ]
+        }
+      </output_format>
+    </task2_proof_evaluation>
+
+    <error_handling_and_resilience>
+      - Retry on LLM API failures with tenacity exponential backoff
+      - Graceful handling of individual prompt failures (don't abort entire batch)
+      - Logging via Python logging module (INFO and DEBUG levels)
+      - Progress bars via tqdm for long-running operations
+      - Resume support: skip already-processed records based on existing output file (optional)
+    </error_handling_and_resilience>
+  </core_features>
+
+  <benchmark_data_schema>
+    <minif2f_entry>
+      - id: string              # Unique problem identifier (e.g., "mathd_algebra_478")
+      - split: string           # Dataset split ("test")
+      - formal_statement: string # Lean 4 theorem declaration with `sorry` placeholder
+      - header: string          # Mathlib imports and namespace declarations
+      - nl_statement: string    # Natural language problem statement (LaTeX formatted)
+      - informal_proof: string  # Human-readable proof explanation
+    </minif2f_entry>
+  </benchmark_data_schema>
+
+  <configuration>
+    <env_variables>
+      # Tested model configuration
+      TEST_API_URL=https://api.example.com/v1
+      TEST_MODEL_NAME=model-name
+      TEST_API_KEY=sk-xxx
+
+      # Judge model configuration (optional, falls back to tested model)
+      JUDGE_API_URL=https://api.example.com/v1
+      JUDGE_MODEL_NAME=judge-model-name
+      JUDGE_API_KEY=sk-xxx
+
+      # Lean runner configuration
+      LEAN_API_URL=http://localhost:8000/run
+    </env_variables>
+  </configuration>
+
+  <existing_code>
+    <lean_runner_api file="src/lean_runner_api.py">
+      Already provided. Contains run_lean_code() function:
+      - Input: code (str), api (str), timeout_sec (int), module_hint, prebuild, cleanup, http_connect_timeout
+      - Output: {"ok": bool, "status_code": int, "elapsed_sec": float, "response": dict/str}
+      - Uses synchronous requests library
+      - DO NOT modify this file
+    </lean_runner_api>
+  </existing_code>
+
+  <implementation_phases>
+    <phase1 name="Foundation and Inference Framework">
+      - Project initialization with uv, pyproject.toml, directory structure
+      - Implement src/core/config.py (APIConfig, dotenv loading)
+      - Implement src/core/utils.py (prompt loading, JSONL I/O, code extraction)
+      - Implement src/core/client.py (AsyncOpenAI wrapper, generate, batch_generate)
+      - Create .env.example
+      - Unit tests for client (mock API), utils functions
+    </phase1>
+
+    <phase2 name="Task1 Translation Quality Evaluation">
+      - Create prompt templates: task1_translate.txt, task1_judge.txt
+      - Implement src/tasks/task1.py (translation + judge scoring logic)
+      - Implement scripts/run_task1.py (CLI entry point with argparse)
+      - Test with benchmark examples
+    </phase2>
+
+    <phase3 name="Task2 Proof Capability Evaluation">
+      - Create prompt template: task2_prove.txt
+      - Implement src/tasks/task2.py (proof generation, Lean execution, Pass@k)
+      - Implement scripts/run_task2.py (CLI entry point with argparse)
+      - Integration with lean_runner_api.py
+      - Test with benchmark examples
+    </phase3>
+
+    <phase4 name="Integration and Polish">
+      - End-to-end testing with small benchmark
+      - Performance tuning (concurrency parameters)
+      - Logging and progress bar integration
+      - Documentation (README.md)
+    </phase4>
+  </implementation_phases>
+
+  <success_criteria>
+    - `python scripts/run_task1.py --data benchmarks/MiniF2F/MiniF2F-test-examples.jsonl --output results/task1_output.jsonl` runs successfully and produces scored output
+    - `python scripts/run_task2.py --data benchmarks/MiniF2F/MiniF2F-test-examples.jsonl --output results/task2_output.jsonl --k 5` runs successfully and produces Pass@k results
+    - Concurrent API calls respect semaphore limits
+    - Failed individual prompts don't crash the entire batch
+    - Output JSONL files contain all required fields per task specification
+    - Resume from partial output works correctly
+  </success_criteria>
+</project_specification>
