@@ -9,11 +9,12 @@ logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 120):
         self.model = model
         self.client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
+            timeout=timeout,
         )
 
     @retry(
@@ -26,6 +27,7 @@ class LLMClient:
         temperature = kwargs.get("temperature", 0.0)
         max_tokens = kwargs.get("max_tokens", 4096)
         seed = kwargs.get("seed", None)
+        reasoning_effort = kwargs.get("reasoning_effort", None)
 
         params: dict[str, Any] = {
             "model": self.model,
@@ -35,6 +37,8 @@ class LLMClient:
         }
         if seed is not None:
             params["seed"] = seed
+        if reasoning_effort and reasoning_effort != "none":
+            params["extra_body"] = {"reasoning_effort": reasoning_effort}
 
         response = await self.client.chat.completions.create(**params)
         content = response.choices[0].message.content or ""

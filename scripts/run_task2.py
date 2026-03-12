@@ -24,6 +24,10 @@ def parse_args():
     parser.add_argument("--lean-concurrency", type=int, default=5, help="Max concurrent Lean executions")
     parser.add_argument("--lean-timeout", type=int, default=60, help="Lean execution timeout (seconds)")
     parser.add_argument("--concurrency", type=int, default=5, help="Max concurrent LLM API calls")
+    parser.add_argument("--max-tokens", type=int, default=32768, help="Max tokens for LLM generation")
+    parser.add_argument("--reasoning-effort", type=str, default="none",
+                        choices=["none", "low", "medium", "high"],
+                        help="Reasoning effort level (for reasoning models)")
     parser.add_argument("--env", default=".env", help="Path to .env file")
     return parser.parse_args()
 
@@ -63,6 +67,8 @@ async def main():
         lean_api_url=lean_api,
         lean_timeout=args.lean_timeout,
         lean_concurrency=args.lean_concurrency,
+        max_tokens=args.max_tokens,
+        reasoning_effort=args.reasoning_effort,
     )
 
     write_jsonl(args.output, results)
